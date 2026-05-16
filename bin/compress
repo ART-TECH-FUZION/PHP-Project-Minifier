@@ -1,0 +1,428 @@
+#!/usr/bin/env php
+<?php
+/**
+ * PHP Compress CLI - Vite-style PHP Project Minifier
+ * 
+ * Install: composer global require compress/php-compress
+ * Usage: compress <source_directory> [output_directory]
+ * 
+ * @version 1.0.0
+ */
+
+// Prevent web access
+if (php_sapi_name() !== 'cli') {
+    http_response_code(403);
+    exit('This tool can only be run from the command line.');
+}
+
+define('COMPRESS_VERSION', '1.0.0');
+
+// Find and load Compressor class
+$possiblePaths = [
+    __DIR__ . '/../src/Compressor.php',
+    __DIR__ . '/../Compressor.php',
+    __DIR__ . '/../../../autoload.php',
+    __DIR__ . '/../vendor/autoload.php',
+];
+
+foreach ($possiblePaths as $path) {
+    if (file_exists($path)) {
+        require_once $path;
+        break;
+    }
+}
+
+/**
+ * Print colored output
+ */
+function printColor($text, $color = 'white') {
+    $colors = [
+        'black'   => '30',
+        'red'     => '31',
+        'green'   => '32',
+        'yellow'  => '33',
+        'blue'    => '34',
+        'magenta' => '35',
+        'cyan'    => '36',
+        'white'   => '37',
+    ];
+    
+    $code = $colors[$color] ?? '37';
+    echo "\033[{$code}m{$text}\033[0m";
+}
+
+/**
+ * Print banner
+ */
+function printBanner() {
+    $banner = "
+    ╔═════════════════════════════════════════════════════╗
+    ║                                                     ║
+    ║     ██████╗ ██████╗  ██████╗ ██████╗  ██████╗      ║
+    ║    ██╔════╝██╔═══██╗██╔════╝██╔═══██╗██╔════╝      ║
+    ║    ██║     ██║   ██║██║     ██║   ██║██║           ║
+    ║    ██║     ██║   ██║██║     ██║   ██║██║           ║
+    ║    ╚██████╗╚██████╔╝╚██████╗╚██████╔╝╚██████╗      ║
+    ║     ╚═════╝ ╚═════╝  ╚═════╝ ╚═════╝  ╚═════╝      ║
+    ║                                                     ║
+    ║           PHP Project Minifier v" . COMPRESS_VERSION . "           ║
+    ║                                                     ║
+    ╚═════════════════════════════════════════════════════╝
+    ";
+    printColor($banner, 'cyan');
+    echo "\n";
+}
+
+/**
+ * Show help message
+ */
+function showHelp() {
+    printBanner();
+    
+    printColor("USAGE\n", 'yellow');
+    echo "    compress <source_directory> [output_directory]\n";
+    echo "    compress --init                 # Create compress.json config\n";
+    echo "    compress --watch <directory>    # Watch and compress on change\n";
+    echo "    compress --help                 # Show this help\n";
+    echo "    compress --version              # Show version\n";
+    echo "\n";
+    
+    printColor("ARGUMENTS\n", 'yellow');
+    echo "    source_directory    Path to your PHP project\n";
+    echo "    output_directory    Optional: Output path (default: source/compress)\n";
+    echo "\n";
+    
+    printColor("OPTIONS\n", 'yellow');
+    echo "    --init              Create default compress.json config file\n";
+    echo "    --watch             Watch for file changes and auto-compress\n";
+    echo "    --min               Minimal output (only stats)\n";
+    echo "    --no-index          Don't create index.php files\n";
+    echo "    --dry-run           Show what would be done without writing\n";
+    echo "    --help, -h          Show this help message\n";
+    echo "    --version, -v       Show version number\n";
+    echo "\n";
+    
+    printColor("EXAMPLES\n", 'yellow');
+    echo "    compress /path/to/project\n";
+    echo "    compress /path/to/project /path/to/output\n";
+    echo "    compress --init\n";
+    echo "    compress --watch /path/to/project\n";
+    echo "\n";
+    
+    printColor("SUPPORTED FILES\n", 'yellow');
+    echo "    .php    PHP files (with inline HTML/CSS/JS)\n";
+    echo "    .html   HTML files (with inline CSS/JS)\n";
+    echo "    .css    Stylesheet files\n";
+    echo "    .js     JavaScript files\n";
+    echo "    .json   JSON files (zero precision loss)\n";
+    echo "    .jsx    React JSX files\n";
+    echo "    .xml    XML files (CDATA protected)\n";
+    echo "\n";
+    
+    printColor("OUTPUT\n", 'yellow');
+    echo "    Creates 'compress' folder with:\n";
+    echo "    • Same directory structure as source\n";
+    echo "    • Minified versions of all supported files\n";
+    echo "    • index.php with 'Silence is golden' in every folder\n";
+    echo "\n";
+}
+
+/**
+ * Show version
+ */
+function showVersion() {
+    echo "compress v" . COMPRESS_VERSION . "\n";
+}
+
+/**
+ * Create default config file
+ */
+function createConfig($directory) {
+    $configPath = $directory . '/compress.json';
+    
+    if (file_exists($configPath)) {
+        printColor("Warning: ", 'yellow');
+        echo "compress.json already exists.\n";
+        return false;
+    }
+    
+    $config = [
+        'source' => './',
+        'output' => './compress',
+        'exclude' => [
+            'node_modules',
+            'vendor',
+            '.git',
+            '.env',
+            'compress',
+            '*.min.js',
+            '*.min.css'
+        ],
+        'extensions' => ['php', 'html', 'htm', 'css', 'js', 'json', 'jsx', 'xml'],
+        'createIndex' => true,
+        'indexContent' => "<?php\n// Silence is golden.\n"
+    ];
+    
+    file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    
+    printColor("✓ ", 'green');
+    echo "Created compress.json\n";
+    return true;
+}
+
+/**
+ * Format bytes to human readable
+ */
+function formatBytes($bytes) {
+    if ($bytes < 1024) return $bytes . ' B';
+    if ($bytes < 1048576) return round($bytes / 1024, 2) . ' KB';
+    return round($bytes / 1048576, 2) . ' MB';
+}
+
+/**
+ * Main entry point
+ */
+function main($argv) {
+    $argc = count($argv);
+    
+    // Parse arguments
+    $options = [];
+    $arguments = [];
+    
+    for ($i = 1; $i < $argc; $i++) {
+        $arg = $argv[$i];
+        
+        if (strpos($arg, '--') === 0) {
+            $options[] = $arg;
+        } else {
+            $arguments[] = $arg;
+        }
+    }
+    
+    // Handle options
+    if (in_array('--help', $options) || in_array('-h', $options)) {
+        showHelp();
+        exit(0);
+    }
+    
+    if (in_array('--version', $options) || in_array('-v', $options)) {
+        showVersion();
+        exit(0);
+    }
+    
+    if (in_array('--init', $options)) {
+        $dir = $arguments[0] ?? getcwd();
+        createConfig($dir);
+        exit(0);
+    }
+    
+    // Need source directory
+    if (empty($arguments)) {
+        printColor("Error: ", 'red');
+        echo "Missing source directory.\n\n";
+        echo "Usage: compress <source_directory> [output_directory]\n";
+        echo "Try: compress --help for more information.\n";
+        exit(1);
+    }
+    
+    $sourceDir = realpath($arguments[0]);
+    $outputDir = $arguments[1] ?? ($sourceDir . '/compress');
+    
+    // Validate source
+    if (!$sourceDir || !is_dir($sourceDir)) {
+        printColor("Error: ", 'red');
+        echo "Source directory does not exist: {$arguments[0]}\n";
+        exit(1);
+    }
+    
+    // Options
+    $minimal = in_array('--min', $options);
+    $dryRun = in_array('--dry-run', $options);
+    $createIndex = !in_array('--no-index', $options);
+    $watch = in_array('--watch', $options);
+    
+    // Print banner if not minimal
+    if (!$minimal) {
+        printBanner();
+    }
+    
+    // Load config if exists
+    $configPath = $sourceDir . '/compress.json';
+    $config = [];
+    
+    if (file_exists($configPath)) {
+        if (!$minimal) {
+            printColor("✓ ", 'green');
+            echo "Loaded compress.json\n\n";
+        }
+        $config = json_decode(file_get_contents($configPath), true) ?? [];
+    }
+    
+    // Initialize compressor
+    $compressor = new Compressor([
+        'createIndex' => $createIndex,
+        'exclude' => $config['exclude'] ?? ['node_modules', 'vendor', '.git', 'compress', '.env'],
+        'extensions' => $config['extensions'] ?? ['php', 'html', 'htm', 'css', 'js', 'json', 'jsx', 'xml']
+    ]);
+    
+    // Watch mode
+    if ($watch) {
+        watchMode($compressor, $sourceDir, $outputDir, $minimal);
+        exit(0);
+    }
+    
+    // Normal compression
+    if (!$minimal) {
+        printColor("Source: ", 'cyan');
+        echo $sourceDir . "\n";
+        printColor("Output: ", 'cyan');
+        echo $outputDir . "\n";
+        echo "\n";
+    }
+    
+    if ($dryRun) {
+        printColor("DRY RUN - No files will be modified\n\n", 'yellow');
+    }
+    
+    // Process
+    $startTime = microtime(true);
+    
+    try {
+        $stats = $compressor->compress($sourceDir, $outputDir, $dryRun);
+    } catch (Exception $e) {
+        printColor("Error: ", 'red');
+        echo $e->getMessage() . "\n";
+        exit(1);
+    }
+    
+    $endTime = microtime(true);
+    $duration = round(($endTime - $startTime) * 1000, 2);
+    
+    // Print results
+    if ($minimal) {
+        echo "Files: {$stats['compressed']}/{$stats['files']} | ";
+        echo "Size: " . formatBytes($stats['originalSize']) . " → " . formatBytes($stats['compressedSize']) . " | ";
+        
+        if ($stats['originalSize'] > 0) {
+            $savings = round((($stats['originalSize'] - $stats['compressedSize']) / $stats['originalSize']) * 100, 1);
+            echo "Saved: {$savings}%\n";
+        }
+    } else {
+        echo "\n";
+        printColor("╔════════════════════════════════════════════╗\n", 'cyan');
+        printColor("║              COMPRESSION RESULTS            ║\n", 'cyan');
+        printColor("╠════════════════════════════════════════════╣\n", 'cyan');
+        printColor("║", 'cyan');
+        printf("  %-20s %20s", 'Total Files:', $stats['files']);
+        printColor("  ║\n", 'cyan');
+        printColor("║", 'cyan');
+        printf("  %-20s ", 'Compressed:');
+        printColor(sprintf("%20s", $stats['compressed']), 'green');
+        printColor("  ║\n", 'cyan');
+        printColor("║", 'cyan');
+        printf("  %-20s ", 'Skipped:');
+        printColor(sprintf("%20s", $stats['skipped']), 'yellow');
+        printColor("  ║\n", 'cyan');
+        printColor("║", 'cyan');
+        printf("  %-20s %20s", 'Ignored:', $stats['ignored']);
+        printColor("  ║\n", 'cyan');
+        printColor("╠════════════════════════════════════════════╣\n", 'cyan');
+        printColor("║", 'cyan');
+        printf("  %-20s %20s", 'Original Size:', formatBytes($stats['originalSize']));
+        printColor("  ║\n", 'cyan');
+        printColor("║", 'cyan');
+        printf("  %-20s ", 'Compressed Size:');
+        printColor(sprintf("%20s", formatBytes($stats['compressedSize'])), 'green');
+        printColor("  ║\n", 'cyan');
+        
+        if ($stats['originalSize'] > 0) {
+            $savings = $stats['originalSize'] - $stats['compressedSize'];
+            $savingsPercent = round(($savings / $stats['originalSize']) * 100, 1);
+            
+            printColor("║", 'cyan');
+            printf("  %-20s ", 'Saved:');
+            printColor(sprintf("%20s", formatBytes($savings)), 'green');
+            printColor("  ║\n", 'cyan');
+            printColor("║", 'cyan');
+            printf("  %-20s ", 'Reduction:');
+            printColor(sprintf("%20s", $savingsPercent . '%'), 'green');
+            printColor("  ║\n", 'cyan');
+        }
+        
+        printColor("╠════════════════════════════════════════════╣\n", 'cyan');
+        printColor("║", 'cyan');
+        printf("  %-20s %20s", 'Time:', $duration . 'ms');
+        printColor("  ║\n", 'cyan');
+        printColor("╚════════════════════════════════════════════╝\n", 'cyan');
+        
+        if (!empty($stats['errors'])) {
+            echo "\n";
+            printColor("Errors:\n", 'red');
+            foreach ($stats['errors'] as $err) {
+                echo "  - {$err['file']}: {$err['error']}\n";
+            }
+        }
+        
+        echo "\n";
+        printColor("✓ ", 'green');
+        echo "Output: ";
+        printColor($outputDir, 'cyan');
+        echo "\n";
+    }
+    
+    exit(0);
+}
+
+/**
+ * Watch mode - monitor for changes
+ */
+function watchMode($compressor, $sourceDir, $outputDir, $minimal) {
+    if (!$minimal) {
+        printColor("Watching for changes...\n", 'cyan');
+        printColor("Press Ctrl+C to stop\n\n", 'yellow');
+    }
+    
+    $lastHash = '';
+    $lastTime = 0;
+    
+    while (true) {
+        clearstatcache();
+        
+        $hash = '';
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($sourceDir, RecursiveDirectoryIterator::SKIP_DOTS)
+        );
+        
+        foreach ($iterator as $file) {
+            if ($file->isFile()) {
+                $hash .= $file->getMTime() . $file->getPathname();
+            }
+        }
+        
+        $currentHash = md5($hash);
+        
+        if ($currentHash !== $lastHash && (time() - $lastTime) > 1) {
+            $lastHash = $currentHash;
+            $lastTime = time();
+            
+            $now = date('H:i:s');
+            printColor("[{$now}] ", 'cyan');
+            echo "Changes detected, compressing...\n";
+            
+            $stats = $compressor->compress($sourceDir, $outputDir, false);
+            
+            $savings = 0;
+            if ($stats['originalSize'] > 0) {
+                $savings = round((($stats['originalSize'] - $stats['compressedSize']) / $stats['originalSize']) * 100, 1);
+            }
+            
+            printColor("[{$now}] ", 'green');
+            echo "Done! {$stats['compressed']} files, {$savings}% saved\n\n";
+        }
+        
+        usleep(500000); // Check every 0.5s
+    }
+}
+
+// Run
+main($argv);

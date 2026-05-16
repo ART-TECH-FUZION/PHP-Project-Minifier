@@ -1,0 +1,262 @@
+#!/usr/bin/env php
+<?php
+
+$baseDir = '/Users/rahulkumar/Desktop/compressor';
+
+if (file_exists($baseDir . '/CompressCore.php')) {
+    require_once $baseDir . '/CompressCore.php';
+} elseif (file_exists($baseDir . '/vendor/autoload.php')) {
+    require_once $baseDir . '/vendor/autoload.php';
+} else {
+    $possiblePaths = [
+        __DIR__ . '/../vendor/autoload.php',
+        dirname(__DIR__) . '/vendor/autoload.php',
+        getcwd() . '/vendor/autoload.php',
+    ];
+    
+    $loaded = false;
+    foreach ($possiblePaths as $path) {
+        if (file_exists($path)) {
+            require_once $path;
+            $loaded = true;
+            break;
+        }
+    }
+    
+    if (!$loaded) {
+        echo "Error: CompressCore.php not found!\n";
+        echo "Please ensure the compressor library is installed.\n";
+        exit(1);
+    }
+}
+
+if (!class_exists('ProjectCompressor')) {
+    echo "Error: ProjectCompressor class not found!\n";
+    exit(1);
+}
+
+function showHelp() {
+    echo "
+╔═══════════════════════════════════════════════════════════╗
+║                    PROJECT MINIFIER                       ║
+║            (Like Vite, but for PHP Projects)              ║
+╚═══════════════════════════════════════════════════════════╝
+
+Usage: 
+  minify [command] [options]
+
+Commands:
+  build     Compress the project (alias: b)
+  watch     Watch for changes and auto-compress (alias: w)
+  help      Show this help message (alias: h)
+
+Options:
+  --output, -o     Output folder (default: dist)
+  --force, -f     Force rebuild (ignore cache)
+  --verbose, -v   Show detailed output
+
+Examples:
+  minify build
+  minify build -o compress
+  minify build -f
+  minify watch
+
+Shortcuts:
+  minify b      → Build project
+  minify w      → Watch mode
+  minify        → Show help
+
+";
+    exit(0);
+}
+
+function showVersion() {
+    echo "Project Minifier v1.0.0\n";
+    exit(0);
+}
+
+function filectime_recursive($dir, &$files = []) {
+    if (!is_dir($dir)) return $files;
+    
+    $items = scandir($dir);
+    foreach ($items as $item) {
+        if ($item === '.' || $item === '..') continue;
+        
+        $path = $dir . DIRECTORY_SEPARATOR . $item;
+        
+        if (is_dir($path)) {
+            filectime_recursive($path, $files);
+        } else {
+            $files[] = filectime($path);
+        }
+    }
+    
+    return $files;
+}
+
+$command = $argv[1] ?? 'help';
+$options = [];
+$outputDir = 'dist';
+$force = false;
+$verbose = false;
+
+for ($i = 2; $i < $argc; $i++) {
+    $arg = $argv[$i];
+    
+    if (in_array($arg, ['build', 'b', 'watch', 'w', 'help', 'h', 'version', 'v'])) {
+        $command = $arg;
+        continue;
+    }
+    
+    if (in_array($arg, ['--output', '-o']) && isset($argv[$i + 1])) {
+        $outputDir = $argv[++$i];
+        continue;
+    }
+    
+    if (in_array($arg, ['--force', '-f'])) {
+        $force = true;
+        continue;
+    }
+    
+    if (in_array($arg, ['--verbose', '-vv'])) {
+        $verbose = true;
+        continue;
+    }
+    
+    if ($arg === '--help' || $arg === '-h') {
+        showHelp();
+    }
+}
+
+$aliases = [
+    'b' => 'build',
+    'w' => 'watch', 
+    'h' => 'help',
+    'v' => 'version'
+];
+if (isset($aliases[$command])) {
+    $command = $aliases[$command];
+}
+
+$projectRoot = getcwd();
+
+if (!is_dir($projectRoot)) {
+    echo "Error: Project directory does not exist: $projectRoot\n";
+    exit(1);
+}
+
+$sourceDir = $projectRoot;
+$destDir = $projectRoot . DIRECTORY_SEPARATOR . $outputDir;
+
+if ($command === 'version') {
+    showVersion();
+}
+
+if ($command === 'help') {
+    showHelp();
+}
+
+if ($command === 'build') {
+    if ($force && is_dir($destDir)) {
+        array_map('unlink', glob($destDir . DIRECTORY_SEPARATOR . '*'));
+        rmdir($destDir);
+    }
+    
+    echo "
+╔═══════════════════════════════════════════════════════════╗
+║                    PROJECT MINIFIER                       ║
+║                    Building Project...                    ║
+╚═══════════════════════════════════════════════════════════╝
+
+📁 Source:     $sourceDir
+📦 Output:     $destDir
+";
+    
+    try {
+        $compressor = new ProjectCompressor();
+        $stats = $compressor->processDirectory($sourceDir, $destDir);
+        
+        echo "
+✅ Build Complete!
+
+📊 Statistics:
+   Total Files:    " . $stats['files'] . "
+   Compressed:     " . $stats['compressed'] . "
+   Skipped:        " . $stats['skipped'] . "
+   Ignored:        " . ($stats['ignored'] ?? 0) . "
+   Original Size:  " . number_format($stats['originalSize']) . " bytes
+   Compressed:     " . number_format($stats['compressedSize']) . " bytes
+";
+        
+        if ($stats['originalSize'] > 0) {
+            $savings = round((($stats['originalSize'] - $stats['compressedSize']) / $stats['originalSize']) * 100, 1);
+            echo "   💾 Savings:      $savings%\n";
+        }
+        
+        if (!empty($stats['errors'])) {
+            echo "\n⚠️  Errors:\n";
+            foreach ($stats['errors'] as $err) {
+                echo "   - " . basename($err['file']) . ": " . $err['error'] . "\n";
+            }
+        }
+        
+        echo "\n✨ Output ready at: $destDir\n";
+        
+    } catch (Exception $e) {
+        echo "\n❌ Error: " . $e->getMessage() . "\n";
+        exit(1);
+    }
+    
+    exit(0);
+}
+
+if ($command === 'watch') {
+    echo "
+╔═══════════════════════════════════════════════════════════╗
+║                    PROJECT MINIFIER                       ║
+║                    Watching for changes...                ║
+╚═══════════════════════════════════════════════════════════╝
+
+👀 Watching: $sourceDir
+📦 Output:   $destDir
+
+Press Ctrl+C to stop.
+
+";
+    
+    $lastHash = '';
+    
+    while (true) {
+        clearstatcache();
+        
+        $currentHash = md5(serialize(filectime_recursive($sourceDir)));
+        
+        if ($currentHash !== $lastHash) {
+            echo "\n📦 Rebuilding...\n";
+            
+            try {
+                $compressor = new ProjectCompressor();
+                
+                if (is_dir($destDir)) {
+                    array_map('unlink', glob($destDir . DIRECTORY_SEPARATOR . '*'));
+                    rmdir($destDir);
+                }
+                
+                $stats = $compressor->processDirectory($sourceDir, $destDir);
+                
+                echo "   ✅ Done! Compressed: " . $stats['compressed'] . " files\n";
+                
+            } catch (Exception $e) {
+                echo "   ❌ Error: " . $e->getMessage() . "\n";
+            }
+            
+            $lastHash = md5(serialize(filectime_recursive($sourceDir)));
+        }
+        
+        sleep(2);
+    }
+    
+    exit(0);
+}
+
+showHelp();

@@ -1,0 +1,37 @@
+{
+    "name": "compress/php-compress",
+    "description": "A Vite-style PHP project minifier. Compress PHP, HTML, CSS, JS, JSON, JSX, XML files from terminal.",
+    "keywords": ["php", "minifier", "compress", "cli", "vite", "build", "minify"],
+    "type": "library",
+    "license": "MIT",
+    "version": "1.0.0",
+    "authors": [
+        {
+            "name": "Developer",
+            "email": "developer@example.com"
+        }
+    ],
+    "require": {
+        "php": ">=7.4"
+    },
+    "bin": [
+        "bin/compress"
+    ],
+    "autoload": {
+        "psr-4": {
+            "Compress\\": "src/"
+        },
+        "classmap": ["src/"]
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "1.0.x-dev"
+        }
+    },
+    "config": {
+        "bin-dir": "bin",
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

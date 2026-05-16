@@ -1,0 +1,10 @@
+.code-review-graph
+.vscode
+.DS_Store
+.env
+.temp
+.agents
+node_modules
+package-lock.json
+package.json
+vite.config.js
