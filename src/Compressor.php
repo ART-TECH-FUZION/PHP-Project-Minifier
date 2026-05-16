@@ -730,8 +730,6 @@ class Compressor {
         $result = '';
         $len = strlen($code);
         $i = 0;
-        $inString = false;
-        $stringChar = '';
         $lastChar = '';
         $inLineComment = false;
         $inBlockComment = false;
@@ -741,29 +739,11 @@ class Compressor {
             $nextChar = ($i + 1 < $len) ? $code[$i + 1] : '';
             
             if (!$inLineComment && !$inBlockComment) {
-                // String detection
-                if (!$inString && ($char === '"' || $char === "'")) {
-                    $inString = true;
-                    $stringChar = $char;
-                    $result .= $char;
-                    $lastChar = $char;
-                    $i++;
-                    continue;
-                }
-                
-                if ($inString) {
-                    $result .= $char;
-                    if ($char === '\\' && $i + 1 < $len) {
-                        $i++;
-                        $result .= $code[$i];
-                        $lastChar = $code[$i];
-                    } elseif ($char === $stringChar) {
-                        $inString = false;
-                        $lastChar = $char;
-                    } else {
-                        $lastChar = $char;
-                    }
-                    $i++;
+                if ($char === '"' || $char === "'") {
+                    [$literal, $nextIndex] = $this->consumePhpStringLiteral($code, $i, $char);
+                    $result .= $this->minifyStructuredPhpStringLiteral($literal, $char);
+                    $lastChar = substr($literal, -1);
+                    $i = $nextIndex;
                     continue;
                 }
                 
@@ -1200,8 +1180,8 @@ class Compressor {
 
     private function consumeQuotedString($source, $startIndex, $quote) {
         $len = strlen($source);
-        $i = $startIndex;
-        $result = '';
+        $i = $startIndex + 1;
+        $result = $quote;
 
         while ($i < $len) {
             $char = $source[$i];
@@ -1305,6 +1285,78 @@ class Compressor {
         }
 
         return strtr($this->minifyHTML($content), $placeholders);
+    }
+
+    private function consumePhpStringLiteral($source, $startIndex, $quote) {
+        $len = strlen($source);
+        $i = $startIndex + 1;
+        $literal = $quote;
+
+        while ($i < $len) {
+            $char = $source[$i];
+            $literal .= $char;
+
+            if ($char === '\\' && $i + 1 < $len) {
+                $i++;
+                $literal .= $source[$i];
+                $i++;
+                continue;
+            }
+
+            $i++;
+            if ($char === $quote) {
+                break;
+            }
+        }
+
+        return [$literal, $i];
+    }
+
+    private function minifyStructuredPhpStringLiteral($literal, $quote) {
+        if (strlen($literal) < 2) {
+            return $literal;
+        }
+
+        $content = substr($literal, 1, -1);
+        if (!preg_match('/[\r\n]/', $content)) {
+            return $literal;
+        }
+
+        if ($this->looksLikeSqlString($content)) {
+            $content = $this->minifySqlStringContent($content);
+        } elseif ($this->looksLikeHtmlString($content)) {
+            $content = $this->minifyHTML($content);
+        } else {
+            return $literal;
+        }
+
+        return $quote . $content . $quote;
+    }
+
+    private function looksLikeSqlString($content) {
+        $trimmed = trim($content);
+
+        if ($trimmed === '') {
+            return false;
+        }
+
+        return (bool) preg_match(
+            '/\b(select|insert|update|delete|replace|create|alter|drop|truncate|where|from|join|order\s+by|group\s+by|limit|values|primary\s+key|foreign\s+key|engine=|default\s+charset)\b/i',
+            $trimmed
+        );
+    }
+
+    private function minifySqlStringContent($content) {
+        $content = preg_replace('/\s+/', ' ', trim($content));
+        $content = preg_replace('/\s*,\s*/', ',', $content);
+        $content = preg_replace('/\(\s+/', '(', $content);
+        $content = preg_replace('/\s+\)/', ')', $content);
+
+        return $content;
+    }
+
+    private function looksLikeHtmlString($content) {
+        return (bool) preg_match('/<\s*\/?[a-z!][^>]*>/i', $content);
     }
     
     // ==========================================
